@@ -23,6 +23,7 @@ from csm.core.controllers.validators import PasswordValidator, UserNameValidator
 from cortx.utils.log import Log
 from csm.common.errors import InvalidRequest, CsmPermissionDenied
 from cortx.utils.conf_store.conf_store import Conf
+from time import sleep
 
 
 INVALID_REQUEST_PARAMETERS = "invalid request parameter"
@@ -208,3 +209,39 @@ class CsmUsersView(CsmView):
         resp = await self._service.update_user(user_id, user_body,
                                                self.request.session.credentials.user_id)
         return resp
+
+@CsmView._app_routes.view("/api/v1/csm/dummyapi/{timeinsec}")
+@CsmView._app_routes.view("/api/v2/csm/dummyapi/{timeinsec}")
+class MockingDelay(CsmView):
+    def __init__(self, request):
+        super(MockingDelay, self).__init__(request)
+        self._service = self.request.app["csm_user_service"]
+        self._service_dispatch = {}
+
+    async def check_max_user_limit(self):
+        max_users_allowed = int(Conf.get(const.CSM_GLOBAL_INDEX, const.CSM_MAX_USERS_ALLOWED))
+        existing_users_count = await self._service.get_user_count()
+        if existing_users_count >= max_users_allowed:
+            raise CsmPermissionDenied("User creation failed. Maximum user limit reached.")
+
+    """
+    GET REST implementation for fetching csm users
+    """
+    @CsmAuth.permissions({Resource.USERS: {Action.LIST}})
+    async def get(self):
+        Log.debug(f"Handling csm users fetch request."
+                  f" user_id: {self.request.session.credentials.user_id}")
+        csm_schema = CsmGetUsersSchema()
+        try:
+            timeinsec = int(self.request.match_info["timeinsec"])
+        except:
+            timeinsec = 40
+        try:
+            request_data = csm_schema.load(self.request.rel_url.query, unknown='EXCLUDE')
+        except ValidationError as val_err:
+            raise InvalidRequest(
+                "Invalid parameter for user", str(val_err))
+        users = await self._service.get_user_list(**request_data) 
+        Log.debug(f"Waiting for requested time (in sec ) : {timeinsec}")
+        sleep(timeinsec)
+        return {'users': users}
